@@ -38,28 +38,24 @@ def DeepFM(linear_feature_columns, dnn_feature_columns, fm_group=[DEFAULT_GROUP_
     :return: A Keras model instance.
     """
 
-    features = build_input_features(
-        linear_feature_columns + dnn_feature_columns)
+    # 根据特征配置，生成 input
+    features = build_input_features(linear_feature_columns + dnn_feature_columns)
 
-    inputs_list = list(features.values())
+    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear', l2_reg=l2_reg_linear) # batch size * 1
 
-    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear',
-                                    l2_reg=l2_reg_linear)
+    group_embedding_dict, dense_value_list = input_from_feature_columns(features, dnn_feature_columns, l2_reg_embedding, seed, support_group=True)
+    # group_embedding_dict: dict[group_name, list[Tensor]] tensor 纬度是 batch size * 1 * emb size
+    # dense_value_list: list[Input]  Input 是 batch size * dense size
 
-    group_embedding_dict, dense_value_list = input_from_feature_columns(features, dnn_feature_columns, l2_reg_embedding,
-                                                                        seed, support_group=True)
+    fm_logit = add_func([FM()(concat_func(emb_list, axis=1)) for group_name, emb_list in group_embedding_dict.items() if group_name in fm_group])
+    # batch size * 1
 
-    fm_logit = add_func([FM()(concat_func(v, axis=1))
-                         for k, v in group_embedding_dict.items() if k in fm_group])
-
-    dnn_input = combined_dnn_input(list(chain.from_iterable(
-        group_embedding_dict.values())), dense_value_list)
+    dnn_input = combined_dnn_input(list(chain.from_iterable(group_embedding_dict.values())), dense_value_list)
     dnn_output = DNN(dnn_hidden_units, dnn_activation, l2_reg_dnn, dnn_dropout, dnn_use_bn, seed=seed)(dnn_input)
-    dnn_logit = tf.keras.layers.Dense(
-        1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed=seed))(dnn_output)
+    dnn_logit = tf.keras.layers.Dense(1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed=seed))(dnn_output)
 
     final_logit = add_func([linear_logit, fm_logit, dnn_logit])
 
     output = PredictionLayer(task)(final_logit)
-    model = tf.keras.models.Model(inputs=inputs_list, outputs=output)
+    model = tf.keras.models.Model(inputs=list(features.values()), outputs=output)
     return model

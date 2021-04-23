@@ -81,20 +81,27 @@ class AFMLayer(Layer):
 
         embedding_size = int(input_shape[0][-1])
 
-        self.attention_W = self.add_weight(shape=(embedding_size,
-                                                  self.attention_factor), initializer=glorot_normal(seed=self.seed),
-                                           regularizer=l2(self.l2_reg_w), name="attention_W")
-        self.attention_b = self.add_weight(
-            shape=(self.attention_factor,), initializer=Zeros(), name="attention_b")
-        self.projection_h = self.add_weight(shape=(self.attention_factor, 1),
-                                            initializer=glorot_normal(seed=self.seed), name="projection_h")
-        self.projection_p = self.add_weight(shape=(
-            embedding_size, 1), initializer=glorot_normal(seed=self.seed), name="projection_p")
-        self.dropout = tf.keras.layers.Dropout(
-            self.dropout_rate, seed=self.seed)
+        # attention的全链接层参数
+        self.attention_W = self.add_weight(shape=(embedding_size,self.attention_factor),
+                                           initializer=glorot_normal(seed=self.seed),
+                                           regularizer=l2(self.l2_reg_w),
+                                           name="attention_W")
+        self.attention_b = self.add_weight(shape=(self.attention_factor,),
+                                           initializer=Zeros(),
+                                           name="attention_b")
 
-        self.tensordot = tf.keras.layers.Lambda(
-            lambda x: tf.tensordot(x[0], x[1], axes=(-1, 0)))
+        self.projection_h = self.add_weight(shape=(self.attention_factor, 1),
+                                            initializer=glorot_normal(seed=self.seed),
+                                            name="projection_h")
+
+        #替换reducesum的参数
+        self.projection_p = self.add_weight(shape=(embedding_size, 1),
+                                            initializer=glorot_normal(seed=self.seed),
+                                            name="projection_p")
+
+        self.dropout = tf.keras.layers.Dropout(self.dropout_rate, seed=self.seed)
+
+        self.tensordot = tf.keras.layers.Lambda(lambda x: tf.tensordot(x[0], x[1], axes=(-1, 0)))
 
         # Be sure to call this somewhere!
         super(AFMLayer, self).build(input_shape)
@@ -102,45 +109,40 @@ class AFMLayer(Layer):
     def call(self, inputs, training=None, **kwargs):
 
         if K.ndim(inputs[0]) != 3:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
 
-        embeds_vec_list = inputs
+        embeds_vec_list = inputs # list of (batch_size,1,embedding_size)
         row = []
         col = []
 
-        for r, c in itertools.combinations(embeds_vec_list, 2):
+        for r, c in itertools.combinations(embeds_vec_list, 2): # 两两组合，不能再使用fm的化简公式了
             row.append(r)
             col.append(c)
 
-        p = tf.concat(row, axis=1)
-        q = tf.concat(col, axis=1)
-        inner_product = p * q
+        p = tf.concat(row, axis=1) # batch size * m * emb size   m = n * (n-1) / 2
+        q = tf.concat(col, axis=1) # batch size * m * emb size   m = n * (n-1) / 2
+        inner_product = p * q      # batch size * m * emb size   m = n * (n-1) / 2
 
         bi_interaction = inner_product
-        attention_temp = tf.nn.relu(tf.nn.bias_add(tf.tensordot(
-            bi_interaction, self.attention_W, axes=(-1, 0)), self.attention_b))
+        attention_temp = tf.nn.relu(tf.nn.bias_add(
+            tf.tensordot(bi_interaction, self.attention_W, axes=(-1, 0)),
+            self.attention_b)
+        )  # batch size * m * attention_factor
         #  Dense(self.attention_factor,'relu',kernel_regularizer=l2(self.l2_reg_w))(bi_interaction)
-        self.normalized_att_score = softmax(tf.tensordot(
-            attention_temp, self.projection_h, axes=(-1, 0)), dim=1)
-        attention_output = reduce_sum(
-            self.normalized_att_score * bi_interaction, axis=1)
-
-        attention_output = self.dropout(attention_output, training=training)  # training
-
-        afm_out = self.tensordot([attention_output, self.projection_p])
+        self.normalized_att_score = softmax(tf.tensordot(attention_temp, self.projection_h, axes=(-1, 0)), dim=1) # batch size * m * 1
+        attention_output = reduce_sum(self.normalized_att_score * bi_interaction, axis=1) # batch size * emb size
+        attention_output = self.dropout(attention_output, training=training)  # batch size * emb size
+        afm_out = self.tensordot([attention_output, self.projection_p]) #  batch size * 1  替换 reducesum，这里有些不同
         return afm_out
 
     def compute_output_shape(self, input_shape):
 
         if not isinstance(input_shape, list):
-            raise ValueError('A `AFMLayer` layer should be called '
-                             'on a list of inputs.')
+            raise ValueError('A `AFMLayer` layer should be called on a list of inputs.')
         return (None, 1)
 
     def get_config(self, ):
-        config = {'attention_factor': self.attention_factor,
-                  'l2_reg_w': self.l2_reg_w, 'dropout_rate': self.dropout_rate, 'seed': self.seed}
+        config = {'attention_factor': self.attention_factor, 'l2_reg_w': self.l2_reg_w, 'dropout_rate': self.dropout_rate, 'seed': self.seed}
         base_config = super(AFMLayer, self).get_config()
         base_config.update(config)
         return base_config
@@ -195,30 +197,22 @@ class BiInteractionPooling(Layer):
 class CIN(Layer):
     """Compressed Interaction Network used in xDeepFM.This implemention is
     adapted from code that the author of the paper published on https://github.com/Leavingseason/xDeepFM.
-
       Input shape
         - 3D tensor with shape: ``(batch_size,field_size,embedding_size)``.
-
       Output shape
         - 2D tensor with shape: ``(batch_size, featuremap_num)`` ``featuremap_num =  sum(self.layer_size[:-1]) // 2 + self.layer_size[-1]`` if ``split_half=True``,else  ``sum(layer_size)`` .
-
       Arguments
         - **layer_size** : list of int.Feature maps in each layer.
-
         - **activation** : activation function used on feature maps.
-
         - **split_half** : bool.if set to False, half of the feature maps in each hidden will connect to output unit.
-
         - **seed** : A Python integer to use as random seed.
-
       References
         - [Lian J, Zhou X, Zhang F, et al. xDeepFM: Combining Explicit and Implicit Feature Interactions for Recommender Systems[J]. arXiv preprint arXiv:1803.05170, 2018.] (https://arxiv.org/pdf/1803.05170.pdf)
     """
 
     def __init__(self, layer_size=(128, 128), activation='relu', split_half=True, l2_reg=1e-5, seed=1024, **kwargs):
         if len(layer_size) == 0:
-            raise ValueError(
-                "layer_size must be a list(tuple) of length greater than 1")
+            raise ValueError("layer_size must be a list(tuple) of length greater than 1")
         self.layer_size = layer_size
         self.split_half = split_half
         self.activation = activation
@@ -228,8 +222,7 @@ class CIN(Layer):
 
     def build(self, input_shape):
         if len(input_shape) != 3:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 3 dimensions" % (len(input_shape)))
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 3 dimensions" % (len(input_shape)))
 
         self.field_nums = [int(input_shape[1])]
         self.filters = []
@@ -237,64 +230,47 @@ class CIN(Layer):
         for i, size in enumerate(self.layer_size):
 
             self.filters.append(self.add_weight(name='filter' + str(i),
-                                                shape=[1, self.field_nums[-1]
-                                                       * self.field_nums[0], size],
-                                                dtype=tf.float32, initializer=glorot_uniform(
-                    seed=self.seed + i),
+                                                shape=[1, self.field_nums[-1] * self.field_nums[0], size],
+                                                dtype=tf.float32,
+                                                initializer=glorot_uniform(seed=self.seed + i),
                                                 regularizer=l2(self.l2_reg)))
 
-            self.bias.append(self.add_weight(name='bias' + str(i), shape=[size], dtype=tf.float32,
+            self.bias.append(self.add_weight(name='bias' + str(i),
+                                             shape=[size],
+                                             dtype=tf.float32,
                                              initializer=tf.keras.initializers.Zeros()))
 
             if self.split_half:
                 if i != len(self.layer_size) - 1 and size % 2 > 0:
-                    raise ValueError(
-                        "layer_size must be even number except for the last layer when split_half=True")
-
+                    raise ValueError("layer_size must be even number except for the last layer when split_half=True")
                 self.field_nums.append(size // 2)
             else:
                 self.field_nums.append(size)
 
-        self.activation_layers = [activation_layer(
-            self.activation) for _ in self.layer_size]
-
+        self.activation_layers = [activation_layer(self.activation) for _ in self.layer_size]
         super(CIN, self).build(input_shape)  # Be sure to call this somewhere!
 
     def call(self, inputs, **kwargs):
-
         if K.ndim(inputs) != 3:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
-
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
         dim = int(inputs.get_shape()[-1])
-        hidden_nn_layers = [inputs]
+        hidden_nn_layers = [inputs] # shape: [(batch_size,field_size,embedding_size)]
         final_result = []
 
-        split_tensor0 = tf.split(hidden_nn_layers[0], dim * [1], 2)
+        #https://github.com/Leavingseason/xDeepFM/blob/master/exdeepfm/src/CIN.py#L166
+        split_tensor0 = tf.split(hidden_nn_layers[0], dim * [1], 2) # [(batch_size,field_size0,1)]*emb_size
         for idx, layer_size in enumerate(self.layer_size):
-            split_tensor = tf.split(hidden_nn_layers[-1], dim * [1], 2)
-
-            dot_result_m = tf.matmul(
-                split_tensor0, split_tensor, transpose_b=True)
-
-            dot_result_o = tf.reshape(
-                dot_result_m, shape=[dim, -1, self.field_nums[0] * self.field_nums[idx]])
-
-            dot_result = tf.transpose(dot_result_o, perm=[1, 0, 2])
-
-            curr_out = tf.nn.conv1d(
-                dot_result, filters=self.filters[idx], stride=1, padding='VALID')
-
+            split_tensor = tf.split(hidden_nn_layers[-1], dim * [1], 2)  # [(batch_size,field_sizei,1)]*emb_size
+            dot_result_m = tf.matmul(split_tensor0, split_tensor, transpose_b=True) # emb_size,batch_size,field_size0,field_sizei
+            dot_result_o = tf.reshape(dot_result_m, shape=[dim, -1, self.field_nums[0] * self.field_nums[idx]]) # emb_size,batch_size,(field_size0 * field_sizei)
+            dot_result = tf.transpose(dot_result_o, perm=[1, 0, 2]) # batch_size,emb_size,(field_size0 * field_sizei)
+            curr_out = tf.nn.conv1d(dot_result, filters=self.filters[idx], stride=1, padding='VALID') # batch_size,emb_size,field_sizei+1
             curr_out = tf.nn.bias_add(curr_out, self.bias[idx])
-
             curr_out = self.activation_layers[idx](curr_out)
-
-            curr_out = tf.transpose(curr_out, perm=[0, 2, 1])
-
+            curr_out = tf.transpose(curr_out, perm=[0, 2, 1]) # batch_size,field_sizei+1,emb_size
             if self.split_half:
                 if idx != len(self.layer_size) - 1:
-                    next_hidden, direct_connect = tf.split(
-                        curr_out, 2 * [layer_size // 2], 1)
+                    next_hidden, direct_connect = tf.split(curr_out, 2 * [layer_size // 2], 1)
                 else:
                     direct_connect = curr_out
                     next_hidden = 0
@@ -302,26 +278,22 @@ class CIN(Layer):
                 direct_connect = curr_out
                 next_hidden = curr_out
 
-            final_result.append(direct_connect)
+            final_result.append(direct_connect)  #list(batch_size,field_sizei+1,emb_size)
             hidden_nn_layers.append(next_hidden)
 
-        result = tf.concat(final_result, axis=1)
-        result = reduce_sum(result, -1, keep_dims=False)
-
+        result = tf.concat(final_result, axis=1) # (batch_size,sum(field_size),emb_size)
+        result = reduce_sum(result, -1, keep_dims=False) # (batch_size,sum(field_size)
         return result
 
     def compute_output_shape(self, input_shape):
         if self.split_half:
-            featuremap_num = sum(
-                self.layer_size[:-1]) // 2 + self.layer_size[-1]
+            featuremap_num = sum(self.layer_size[:-1]) // 2 + self.layer_size[-1]
         else:
             featuremap_num = sum(self.layer_size)
         return (None, featuremap_num)
 
     def get_config(self, ):
-
-        config = {'layer_size': self.layer_size, 'split_half': self.split_half, 'activation': self.activation,
-                  'seed': self.seed}
+        config = {'layer_size': self.layer_size, 'split_half': self.split_half, 'activation': self.activation, 'seed': self.seed}
         base_config = super(CIN, self).get_config()
         base_config.update(config)
         return base_config
@@ -330,22 +302,15 @@ class CIN(Layer):
 class CrossNet(Layer):
     """The Cross Network part of Deep&Cross Network model,
     which leans both low and high degree cross feature.
-
       Input shape
         - 2D tensor with shape: ``(batch_size, units)``.
-
       Output shape
         - 2D tensor with shape: ``(batch_size, units)``.
-
       Arguments
         - **layer_num**: Positive integer, the cross layer number
-
         - **l2_reg**: float between 0 and 1. L2 regularizer strength applied to the kernel weights matrix
-
         - **parameterization**: string, ``"vector"``  or ``"matrix"`` ,  way to parameterize the cross network.
-
         - **seed**: A Python integer to use as random seed.
-
       References
         - [Wang R, Fu B, Fu G, et al. Deep & cross network for ad click predictions[C]//Proceedings of the ADKDD'17. ACM, 2017: 12.](https://arxiv.org/abs/1708.05123)
     """
@@ -359,24 +324,20 @@ class CrossNet(Layer):
         super(CrossNet, self).__init__(**kwargs)
 
     def build(self, input_shape):
-
         if len(input_shape) != 2:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 2 dimensions" % (len(input_shape),))
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 2 dimensions" % (len(input_shape),))
 
         dim = int(input_shape[-1])
         if self.parameterization == 'vector':
             self.kernels = [self.add_weight(name='kernel' + str(i),
                                             shape=(dim, 1),
-                                            initializer=glorot_normal(
-                                                seed=self.seed),
+                                            initializer=glorot_normal(seed=self.seed),
                                             regularizer=l2(self.l2_reg),
                                             trainable=True) for i in range(self.layer_num)]
         elif self.parameterization == 'matrix':
             self.kernels = [self.add_weight(name='kernel' + str(i),
                                             shape=(dim, dim),
-                                            initializer=glorot_normal(
-                                                seed=self.seed),
+                                            initializer=glorot_normal(seed=self.seed),
                                             regularizer=l2(self.l2_reg),
                                             trainable=True) for i in range(self.layer_num)]
         else:  # error
@@ -390,8 +351,7 @@ class CrossNet(Layer):
 
     def call(self, inputs, **kwargs):
         if K.ndim(inputs) != 2:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 2 dimensions" % (K.ndim(inputs)))
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 2 dimensions" % (K.ndim(inputs)))
 
         x_0 = tf.expand_dims(inputs, axis=2)
         x_l = x_0
@@ -411,8 +371,7 @@ class CrossNet(Layer):
 
     def get_config(self, ):
 
-        config = {'layer_num': self.layer_num, 'parameterization': self.parameterization,
-                  'l2_reg': self.l2_reg, 'seed': self.seed}
+        config = {'layer_num': self.layer_num, 'parameterization': self.parameterization, 'l2_reg': self.l2_reg, 'seed': self.seed}
         base_config = super(CrossNet, self).get_config()
         base_config.update(config)
         return base_config
@@ -566,26 +525,21 @@ class FM(Layer):
 
     def build(self, input_shape):
         if len(input_shape) != 3:
-            raise ValueError("Unexpected inputs dimensions % d,\
-                             expect to be 3 dimensions" % (len(input_shape)))
+            raise ValueError("Unexpected inputs dimensions % d, expect to be 3 dimensions" % (len(input_shape)))
 
         super(FM, self).build(input_shape)  # Be sure to call this somewhere!
 
     def call(self, inputs, **kwargs):
 
         if K.ndim(inputs) != 3:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 3 dimensions"
-                % (K.ndim(inputs)))
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
 
         concated_embeds_value = inputs
 
-        square_of_sum = tf.square(reduce_sum(
-            concated_embeds_value, axis=1, keep_dims=True))
-        sum_of_square = reduce_sum(
-            concated_embeds_value * concated_embeds_value, axis=1, keep_dims=True)
+        square_of_sum = tf.square(reduce_sum(concated_embeds_value, axis=1, keep_dims=True)) # batch_size * 1 * emb_size
+        sum_of_square = reduce_sum(concated_embeds_value * concated_embeds_value, axis=1, keep_dims=True) # batch_size * 1 * emb_size
         cross_term = square_of_sum - sum_of_square
-        cross_term = 0.5 * reduce_sum(cross_term, axis=2, keep_dims=False)
+        cross_term = 0.5 * reduce_sum(cross_term, axis=2, keep_dims=False) # batch size * 1
 
         return cross_term
 
@@ -635,8 +589,7 @@ class InnerProductLayer(Layer):
             raise ValueError('A `InnerProductLayer` layer requires '
                              'inputs of a list with same shape tensor like (None,1,embedding_size)'
                              'Got different shapes: %s' % (input_shape[0]))
-        super(InnerProductLayer, self).build(
-            input_shape)  # Be sure to call this somewhere!
+        super(InnerProductLayer, self).build(input_shape)  # Be sure to call this somewhere!
 
     def call(self, inputs, **kwargs):
         if K.ndim(inputs[0]) != 3:
@@ -711,20 +664,23 @@ class InteractingLayer(Layer):
 
     def build(self, input_shape):
         if len(input_shape) != 3:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 3 dimensions" % (len(input_shape)))
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 3 dimensions" % (len(input_shape)))
         embedding_size = int(input_shape[-1])
-        self.W_Query = self.add_weight(name='query', shape=[embedding_size, self.att_embedding_size * self.head_num],
+        self.W_Query = self.add_weight(name='query',
+                                       shape=[embedding_size, self.att_embedding_size * self.head_num],
                                        dtype=tf.float32,
                                        initializer=tf.keras.initializers.TruncatedNormal(seed=self.seed))
-        self.W_key = self.add_weight(name='key', shape=[embedding_size, self.att_embedding_size * self.head_num],
+        self.W_key = self.add_weight(name='key',
+                                     shape=[embedding_size, self.att_embedding_size * self.head_num],
                                      dtype=tf.float32,
                                      initializer=tf.keras.initializers.TruncatedNormal(seed=self.seed + 1))
-        self.W_Value = self.add_weight(name='value', shape=[embedding_size, self.att_embedding_size * self.head_num],
+        self.W_Value = self.add_weight(name='value',
+                                       shape=[embedding_size, self.att_embedding_size * self.head_num],
                                        dtype=tf.float32,
                                        initializer=tf.keras.initializers.TruncatedNormal(seed=self.seed + 2))
         if self.use_res:
-            self.W_Res = self.add_weight(name='res', shape=[embedding_size, self.att_embedding_size * self.head_num],
+            self.W_Res = self.add_weight(name='res',
+                                         shape=[embedding_size, self.att_embedding_size * self.head_num],
                                          dtype=tf.float32,
                                          initializer=tf.keras.initializers.TruncatedNormal(seed=self.seed))
 
@@ -733,26 +689,22 @@ class InteractingLayer(Layer):
 
     def call(self, inputs, **kwargs):
         if K.ndim(inputs) != 3:
-            raise ValueError(
-                "Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
-
-        querys = tf.tensordot(inputs, self.W_Query,
-                              axes=(-1, 0))  # None F D*head_num
+            raise ValueError("Unexpected inputs dimensions %d, expect to be 3 dimensions" % (K.ndim(inputs)))
+        #input: (batch_size,field_size,embedding_size)
+        querys = tf.tensordot(inputs, self.W_Query, axes=(-1, 0))  # None F D*head_num
         keys = tf.tensordot(inputs, self.W_key, axes=(-1, 0))
         values = tf.tensordot(inputs, self.W_Value, axes=(-1, 0))
 
         # head_num None F D
-        querys = tf.stack(tf.split(querys, self.head_num, axis=2))
+        querys = tf.stack(tf.split(querys, self.head_num, axis=2)) # batch size * field size * head_num * att_embedding_size
         keys = tf.stack(tf.split(keys, self.head_num, axis=2))
         values = tf.stack(tf.split(values, self.head_num, axis=2))
 
-        inner_product = tf.matmul(
-            querys, keys, transpose_b=True)  # head_num None F F
+        inner_product = tf.matmul(querys, keys, transpose_b=True)  # batch size * field size * head_num * head_num
         self.normalized_att_scores = softmax(inner_product)
 
-        result = tf.matmul(self.normalized_att_scores,
-                           values)  # head_num None F D
-        result = tf.concat(tf.split(result, self.head_num, ), axis=-1)
+        result = tf.matmul(self.normalized_att_scores, values)  # head_num None F D    batch size * field size * head_num * att_embedding_size
+        result = tf.concat(tf.split(result, self.head_num, ), axis=-1)  # batch size * field size * (head_num * att_embedding_size)
         result = tf.squeeze(result, axis=0)  # None F D*head_num
 
         if self.use_res:
@@ -762,12 +714,10 @@ class InteractingLayer(Layer):
         return result
 
     def compute_output_shape(self, input_shape):
-
         return (None, input_shape[1], self.att_embedding_size * self.head_num)
 
     def get_config(self, ):
-        config = {'att_embedding_size': self.att_embedding_size, 'head_num': self.head_num, 'use_res': self.use_res,
-                  'seed': self.seed}
+        config = {'att_embedding_size': self.att_embedding_size, 'head_num': self.head_num, 'use_res': self.use_res, 'seed': self.seed}
         base_config = super(InteractingLayer, self).get_config()
         base_config.update(config)
         return base_config

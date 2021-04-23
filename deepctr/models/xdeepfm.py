@@ -43,11 +43,9 @@ def xDeepFM(linear_feature_columns, dnn_feature_columns, dnn_hidden_units=(256, 
 
     inputs_list = list(features.values())
 
-    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear',
-                                    l2_reg=l2_reg_linear)
+    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear', l2_reg=l2_reg_linear)
 
-    sparse_embedding_list, dense_value_list = input_from_feature_columns(features, dnn_feature_columns,
-                                                                         l2_reg_embedding, seed)
+    sparse_embedding_list, dense_value_list = input_from_feature_columns(features, dnn_feature_columns, l2_reg_embedding, seed)
 
     fm_input = concat_func(sparse_embedding_list, axis=1)
 
@@ -59,8 +57,7 @@ def xDeepFM(linear_feature_columns, dnn_feature_columns, dnn_hidden_units=(256, 
     final_logit = add_func([linear_logit, dnn_logit])
 
     if len(cin_layer_size) > 0:
-        exFM_out = CIN(cin_layer_size, cin_activation,
-                       cin_split_half, l2_reg_cin, seed)(fm_input)
+        exFM_out = CIN(cin_layer_size, cin_activation,cin_split_half, l2_reg_cin, seed)(fm_input)
         exFM_logit = tf.keras.layers.Dense(1, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(exFM_out)
         final_logit = add_func([final_logit, exFM_logit])
 

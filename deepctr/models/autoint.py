@@ -45,36 +45,32 @@ def AutoInt(linear_feature_columns, dnn_feature_columns, att_layer_num=3, att_em
     if len(dnn_hidden_units) <= 0 and att_layer_num <= 0:
         raise ValueError("Either hidden_layer or att_layer_num must > 0")
 
-    features = build_input_features(dnn_feature_columns)
+    features = build_input_features(dnn_feature_columns) # type: OrderedDict[str,tf.keras.Input]
     inputs_list = list(features.values())
 
-    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear',
-                                    l2_reg=l2_reg_linear)
+    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear', l2_reg=l2_reg_linear)
 
-    sparse_embedding_list, dense_value_list = input_from_feature_columns(features, dnn_feature_columns,
-                                                                         l2_reg_embedding, seed)
+    sparse_embedding_list, dense_value_list = input_from_feature_columns(features, dnn_feature_columns, l2_reg_embedding, seed)
+    # sparse_embedding_list: list[Tensor], tensor shape: batch size * 1 * emb_size
+    # dense_value_list: list[keras.Input]
 
-    att_input = concat_func(sparse_embedding_list, axis=1)
+    att_input = concat_func(sparse_embedding_list, axis=1) #shape: batch size * field size * emb_size
 
     for _ in range(att_layer_num):
-        att_input = InteractingLayer(
-            att_embedding_size, att_head_num, att_res)(att_input)
-    att_output = tf.keras.layers.Flatten()(att_input)
+        att_input = InteractingLayer(att_embedding_size, att_head_num, att_res)(att_input) #3D tensor with shape:``(batch_size,field_size,att_embedding_size * head_num)``.
+    att_output = tf.keras.layers.Flatten()(att_input) # batch_size * X
 
-    dnn_input = combined_dnn_input(sparse_embedding_list, dense_value_list)
+    dnn_input = combined_dnn_input(sparse_embedding_list, dense_value_list) # output type: tensor(batch_size * X)
 
     if len(dnn_hidden_units) > 0 and att_layer_num > 0:  # Deep & Interacting Layer
         deep_out = DNN(dnn_hidden_units, dnn_activation, l2_reg_dnn, dnn_dropout, dnn_use_bn, seed=seed)(dnn_input)
         stack_out = tf.keras.layers.Concatenate()([att_output, deep_out])
-        final_logit = tf.keras.layers.Dense(
-            1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(stack_out)
+        final_logit = tf.keras.layers.Dense(1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(stack_out)
     elif len(dnn_hidden_units) > 0:  # Only Deep
         deep_out = DNN(dnn_hidden_units, dnn_activation, l2_reg_dnn, dnn_dropout, dnn_use_bn, seed=seed)(dnn_input, )
-        final_logit = tf.keras.layers.Dense(
-            1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(deep_out)
+        final_logit = tf.keras.layers.Dense(1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(deep_out)
     elif att_layer_num > 0:  # Only Interacting Layer
-        final_logit = tf.keras.layers.Dense(
-            1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(att_output)
+        final_logit = tf.keras.layers.Dense(1, use_bias=False, kernel_initializer=tf.keras.initializers.glorot_normal(seed))(att_output)
     else:  # Error
         raise NotImplementedError
 

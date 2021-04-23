@@ -25,7 +25,7 @@ from .utils import reduce_sum, reduce_max, div, softmax, reduce_mean
 
 class SequencePoolingLayer(Layer):
     """The SequencePoolingLayer is used to apply pooling operation(sum,mean,max) on variable-length sequence feature/multi-value feature.
-
+      T is seq_len
       Input shape
         - A list of two  tensor [seq_value,seq_len]
 
@@ -107,9 +107,9 @@ class SequencePoolingLayer(Layer):
 
 class WeightedSequenceLayer(Layer):
     """The WeightedSequenceLayer is used to apply weight score on variable-length sequence feature/multi-value feature.
-
+      T是字典长度
       Input shape
-        - A list of two  tensor [seq_value,seq_len,seq_weight]
+        - A list of 3  tensor [seq_value,seq_len,seq_weight]
 
         - seq_value is a 3D tensor with shape: ``(batch_size, T, embedding_size)``
 

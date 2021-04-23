@@ -13,39 +13,37 @@ from .layers.utils import concat_func, add_func
 DEFAULT_GROUP_NAME = "default_group"
 
 
-class SparseFeat(namedtuple('SparseFeat',
-                            ['name', 'vocabulary_size', 'embedding_dim', 'use_hash', 'dtype', 'embeddings_initializer',
-                             'embedding_name',
-                             'group_name', 'trainable'])):
+class SparseFeat(namedtuple('SparseFeat', ['name', 'vocabulary_size', 'embedding_dim', 'use_hash', 'dtype', 'embeddings_initializer', 'embedding_name', 'group_name', 'trainable'])):
+    """
+    对应 one hot feature
+    """
     __slots__ = ()
 
-    def __new__(cls, name, vocabulary_size, embedding_dim=4, use_hash=False, dtype="int32", embeddings_initializer=None,
-                embedding_name=None,
-                group_name=DEFAULT_GROUP_NAME, trainable=True):
+    def __new__(cls, name, vocabulary_size, embedding_dim=4, use_hash=False, dtype="int32", embeddings_initializer=None, embedding_name=None, group_name=DEFAULT_GROUP_NAME, trainable=True):
 
         if embedding_dim == "auto":
             embedding_dim = 6 * int(pow(vocabulary_size, 0.25))
+
         if embeddings_initializer is None:
             embeddings_initializer = RandomNormal(mean=0.0, stddev=0.0001, seed=2020)
 
         if embedding_name is None:
             embedding_name = name
 
-        return super(SparseFeat, cls).__new__(cls, name, vocabulary_size, embedding_dim, use_hash, dtype,
-                                              embeddings_initializer,
-                                              embedding_name, group_name, trainable)
+        return super(SparseFeat, cls).__new__(cls, name, vocabulary_size, embedding_dim, use_hash, dtype, embeddings_initializer, embedding_name, group_name, trainable)
 
     def __hash__(self):
         return self.name.__hash__()
 
 
-class VarLenSparseFeat(namedtuple('VarLenSparseFeat',
-                                  ['sparsefeat', 'maxlen', 'combiner', 'length_name', 'weight_name', 'weight_norm'])):
+class VarLenSparseFeat(namedtuple('VarLenSparseFeat', ['sparsefeat', 'maxlen', 'combiner', 'length_name', 'weight_name', 'weight_norm'])):
+    """
+    对应 multi hot feature
+    """
     __slots__ = ()
 
     def __new__(cls, sparsefeat, maxlen, combiner="mean", length_name=None, weight_name=None, weight_norm=True):
-        return super(VarLenSparseFeat, cls).__new__(cls, sparsefeat, maxlen, combiner, length_name, weight_name,
-                                                    weight_norm)
+        return super(VarLenSparseFeat, cls).__new__(cls, sparsefeat, maxlen, combiner, length_name, weight_name, weight_norm)
 
     @property
     def name(self):
@@ -121,51 +119,48 @@ def get_feature_names(feature_columns):
 
 
 def build_input_features(feature_columns, prefix=''):
+    """
+    根据特征配置，转换成 keras Input dict
+    """
     input_features = OrderedDict()
     for fc in feature_columns:
         if isinstance(fc, SparseFeat):
-            input_features[fc.name] = Input(
-                shape=(1,), name=prefix + fc.name, dtype=fc.dtype)
+            input_features[fc.name] = Input(shape=(1,), name=prefix + fc.name, dtype=fc.dtype)
         elif isinstance(fc, DenseFeat):
-            input_features[fc.name] = Input(
-                shape=(fc.dimension,), name=prefix + fc.name, dtype=fc.dtype)
+            input_features[fc.name] = Input(shape=(fc.dimension,), name=prefix + fc.name, dtype=fc.dtype)
         elif isinstance(fc, VarLenSparseFeat):
-            input_features[fc.name] = Input(shape=(fc.maxlen,), name=prefix + fc.name,
-                                            dtype=fc.dtype)
+            input_features[fc.name] = Input(shape=(fc.maxlen,), name=prefix + fc.name, dtype=fc.dtype)
             if fc.weight_name is not None:
-                input_features[fc.weight_name] = Input(shape=(fc.maxlen, 1), name=prefix + fc.weight_name,
-                                                       dtype="float32")
+                input_features[fc.weight_name] = Input(shape=(fc.maxlen, 1), name=prefix + fc.weight_name, dtype="float32")
             if fc.length_name is not None:
                 input_features[fc.length_name] = Input((1,), name=prefix + fc.length_name, dtype='int32')
-
         else:
             raise TypeError("Invalid feature column type,got", type(fc))
 
     return input_features
 
 
-def get_linear_logit(features, feature_columns, units=1, use_bias=False, seed=1024, prefix='linear',
-                     l2_reg=0):
+def get_linear_logit(features, feature_columns, units=1, use_bias=False, seed=1024, prefix='linear', l2_reg=0):
+    """
+    这里面 units 是干什么用的？代码里没有传入过这个参数，都是使用的默认值
+    输出是 batch_size * units
+    """
     linear_feature_columns = copy(feature_columns)
     for i in range(len(linear_feature_columns)):
         if isinstance(linear_feature_columns[i], SparseFeat):
-            linear_feature_columns[i] = linear_feature_columns[i]._replace(embedding_dim=1,
-                                                                           embeddings_initializer=Zeros())
+            linear_feature_columns[i] = linear_feature_columns[i]._replace(embedding_dim=1, embeddings_initializer=Zeros())
         if isinstance(linear_feature_columns[i], VarLenSparseFeat):
-            linear_feature_columns[i] = linear_feature_columns[i]._replace(
-                sparsefeat=linear_feature_columns[i].sparsefeat._replace(embedding_dim=1,
-                                                                         embeddings_initializer=Zeros()))
+            linear_feature_columns[i] = linear_feature_columns[i]._replace(sparsefeat=linear_feature_columns[i].sparsefeat._replace(embedding_dim=1, embeddings_initializer=Zeros()))
 
-    linear_emb_list = [input_from_feature_columns(features, linear_feature_columns, l2_reg, seed,
-                                                  prefix=prefix + str(i))[0] for i in range(units)]
-    _, dense_input_list = input_from_feature_columns(features, linear_feature_columns, l2_reg, seed, prefix=prefix)
+    linear_emb_list = [input_from_feature_columns(features, linear_feature_columns, l2_reg, seed, prefix=prefix + str(i))[0] for i in range(units)] #[list[tensor]] tensor 纬度是 batch size * 1 * emb_size
+    _, dense_input_list = input_from_feature_columns(features, linear_feature_columns, l2_reg, seed, prefix=prefix) # list[Input]
 
     linear_logit_list = []
     for i in range(units):
 
         if len(linear_emb_list[i]) > 0 and len(dense_input_list) > 0:
-            sparse_input = concat_func(linear_emb_list[i])
-            dense_input = concat_func(dense_input_list)
+            sparse_input = concat_func(linear_emb_list[i]) # list[Tensor] -> Tensor
+            dense_input = concat_func(dense_input_list) # list[Tensor] -> Tensor
             linear_logit = Linear(l2_reg, mode=2, use_bias=use_bias, seed=seed)([sparse_input, dense_input])
         elif len(linear_emb_list[i]) > 0:
             sparse_input = concat_func(linear_emb_list[i])
@@ -181,24 +176,31 @@ def get_linear_logit(features, feature_columns, units=1, use_bias=False, seed=10
     return concat_func(linear_logit_list)
 
 
-def input_from_feature_columns(features, feature_columns, l2_reg, seed, prefix='', seq_mask_zero=True,
-                               support_dense=True, support_group=False):
-    sparse_feature_columns = list(
-        filter(lambda x: isinstance(x, SparseFeat), feature_columns)) if feature_columns else []
-    varlen_sparse_feature_columns = list(
-        filter(lambda x: isinstance(x, VarLenSparseFeat), feature_columns)) if feature_columns else []
+def input_from_feature_columns(features, feature_columns, l2_reg, seed, prefix='', seq_mask_zero=True, support_dense=True, support_group=False):
+    """
+    离散特征转换成 dict(key是 group name， value 是一个 embedding 的 list)，连续特征转换成 list
+    dense特征直接输出
+    :param features: dict of keras inputs
+    :param feature_columns: list of feature config(稀疏稠密)
+    :output type: (group_embedding_dict, dense_value_list)
+    group_embedding_dict 是 dict[group_name, list[tensor]] tensor 纬度是 batch size * 1 * emb_size
+    dense_value_list是 list[Input]
+    """
+    embedding_matrix_dict = create_embedding_matrix(feature_columns, l2_reg, seed, prefix=prefix, seq_mask_zero=seq_mask_zero) # dict(str, Embedding)
 
-    embedding_matrix_dict = create_embedding_matrix(feature_columns, l2_reg, seed, prefix=prefix,
-                                                    seq_mask_zero=seq_mask_zero)
-    group_sparse_embedding_dict = embedding_lookup(embedding_matrix_dict, features, sparse_feature_columns)
-    dense_value_list = get_dense_input(features, feature_columns)
+    sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), feature_columns)) if feature_columns else [] # list(fe_cofig)
+    group_sparse_embedding_dict = embedding_lookup(embedding_matrix_dict, features, sparse_feature_columns) # dict[group_name, list[tensor]] tensor 纬度是 batch size * 1 *  emb_size
+
+    varlen_sparse_feature_columns = list(filter(lambda x: isinstance(x, VarLenSparseFeat), feature_columns)) if feature_columns else []
+    sequence_embed_dict = varlen_embedding_lookup(embedding_matrix_dict, features, varlen_sparse_feature_columns) # dict[feature_name, tensor] tensor 纬度是 batch size * seq_len * emb_size
+    group_varlen_sparse_embedding_dict = get_varlen_pooling_list(sequence_embed_dict, features, varlen_sparse_feature_columns) # dict[group_name, list[tensor]] tensor 纬度是 batch size * 1 * emb_size
+
+    group_embedding_dict = mergeDict(group_sparse_embedding_dict, group_varlen_sparse_embedding_dict) # dict[group_name, list[tensor]] tensor 纬度是 batch size * 1 * emb_size
+    if not support_group:
+        group_embedding_dict = list(chain.from_iterable(group_embedding_dict.values()))
+
+    dense_value_list = get_dense_input(features, feature_columns) #list[Input]
     if not support_dense and len(dense_value_list) > 0:
         raise ValueError("DenseFeat is not supported in dnn_feature_columns")
 
-    sequence_embed_dict = varlen_embedding_lookup(embedding_matrix_dict, features, varlen_sparse_feature_columns)
-    group_varlen_sparse_embedding_dict = get_varlen_pooling_list(sequence_embed_dict, features,
-                                                                 varlen_sparse_feature_columns)
-    group_embedding_dict = mergeDict(group_sparse_embedding_dict, group_varlen_sparse_embedding_dict)
-    if not support_group:
-        group_embedding_dict = list(chain.from_iterable(group_embedding_dict.values()))
     return group_embedding_dict, dense_value_list

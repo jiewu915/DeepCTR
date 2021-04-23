@@ -14,35 +14,11 @@ from tensorflow.python.keras.regularizers import l2
 
 from .layers.sequence import SequencePoolingLayer, WeightedSequenceLayer
 from .layers.utils import Hash
+from tensorflow.python.keras.layers import Input
 
 
 def get_inputs_list(inputs):
     return list(chain(*list(map(lambda x: x.values(), filter(lambda x: x is not None, inputs)))))
-
-
-def create_embedding_dict(sparse_feature_columns, varlen_sparse_feature_columns, seed, l2_reg,
-                          prefix='sparse_', seq_mask_zero=True):
-    sparse_embedding = {}
-    for feat in sparse_feature_columns:
-        emb = Embedding(feat.vocabulary_size, feat.embedding_dim,
-                        embeddings_initializer=feat.embeddings_initializer,
-                        embeddings_regularizer=l2(l2_reg),
-                        name=prefix + '_emb_' + feat.embedding_name)
-        emb.trainable = feat.trainable
-        sparse_embedding[feat.embedding_name] = emb
-
-    if varlen_sparse_feature_columns and len(varlen_sparse_feature_columns) > 0:
-        for feat in varlen_sparse_feature_columns:
-            # if feat.name not in sparse_embedding:
-            emb = Embedding(feat.vocabulary_size, feat.embedding_dim,
-                            embeddings_initializer=feat.embeddings_initializer,
-                            embeddings_regularizer=l2(
-                                l2_reg),
-                            name=prefix + '_seq_emb_' + feat.name,
-                            mask_zero=seq_mask_zero)
-            emb.trainable = feat.trainable
-            sparse_embedding[feat.embedding_name] = emb
-    return sparse_embedding
 
 
 def get_embedding_vec_list(embedding_dict, input_dict, sparse_feature_columns, return_feat_list=(), mask_feat_list=()):
@@ -60,7 +36,39 @@ def get_embedding_vec_list(embedding_dict, input_dict, sparse_feature_columns, r
     return embedding_vec_list
 
 
+# 内部使用
+def create_embedding_dict(sparse_feature_columns, varlen_sparse_feature_columns, seed, l2_reg, prefix='sparse_', seq_mask_zero=True):
+    """
+    根据特征配置文件，生成embedding层，转成 embedding 的 dict，key 是 feat.embedding_name(默认是 fe.name)
+    """
+    sparse_embedding = {}
+    for feat in sparse_feature_columns:
+        emb = Embedding(feat.vocabulary_size, feat.embedding_dim,
+                        embeddings_initializer=feat.embeddings_initializer,
+                        embeddings_regularizer=l2(l2_reg),
+                        name=prefix + '_emb_' + feat.embedding_name)
+        emb.trainable = feat.trainable
+        sparse_embedding[feat.embedding_name] = emb
+
+    if varlen_sparse_feature_columns and len(varlen_sparse_feature_columns) > 0:
+        for feat in varlen_sparse_feature_columns:
+            # if feat.name not in sparse_embedding:
+            emb = Embedding(feat.vocabulary_size, feat.embedding_dim,
+                            embeddings_initializer=feat.embeddings_initializer,
+                            embeddings_regularizer=l2(l2_reg),
+                            name=prefix + '_seq_emb_' + feat.name,
+                            mask_zero=seq_mask_zero)
+            emb.trainable = feat.trainable
+            sparse_embedding[feat.embedding_name] = emb
+    return sparse_embedding
+
+
 def create_embedding_matrix(feature_columns, l2_reg, seed, prefix="", seq_mask_zero=True):
+    """
+    根据稀疏特征配置文件，生成 embedding dict
+    :type feature_columns: list[feature_config]
+    :type output: dict[str, Embedding]
+    """
     from . import feature_column as fc_lib
 
     sparse_feature_columns = list(
@@ -72,8 +80,11 @@ def create_embedding_matrix(feature_columns, l2_reg, seed, prefix="", seq_mask_z
     return sparse_emb_dict
 
 
-def embedding_lookup(sparse_embedding_dict, sparse_input_dict, sparse_feature_columns, return_feat_list=(),
-                     mask_feat_list=(), to_list=False):
+def embedding_lookup(sparse_embedding_dict, sparse_input_dict, sparse_feature_columns, return_feat_list=(), mask_feat_list=(), to_list=False):
+    """
+    根据稀疏特征配置文件和 embedding dict，查表获取 embedding，返回的 dict key 是 group name，value 是 embedding查表结果
+    output shape: dict[group_name, list[tensor]] tensor 纬度是 batch size * 1 *  emb_size
+    """
     group_embedding_dict = defaultdict(list)
     for fc in sparse_feature_columns:
         feature_name = fc.name
@@ -92,6 +103,9 @@ def embedding_lookup(sparse_embedding_dict, sparse_input_dict, sparse_feature_co
 
 
 def varlen_embedding_lookup(embedding_dict, sequence_input_dict, varlen_sparse_feature_columns):
+    """
+    output shape: dict[feature_name, tensor] tensor 纬度是 batch size * seq_len * emb_size
+    """
     varlen_embedding_vec_dict = {}
     for fc in varlen_sparse_feature_columns:
         feature_name = fc.name
@@ -105,27 +119,30 @@ def varlen_embedding_lookup(embedding_dict, sequence_input_dict, varlen_sparse_f
 
 
 def get_varlen_pooling_list(embedding_dict, features, varlen_sparse_feature_columns, to_list=False):
+    """
+    :param embedding_dict: 类型是 dict[feature_name, tensor] tensor 纬度是 batch size * seq_len * emb_size
+
+    output shape: dict[group_name, list[tensor]] tensor 纬度是 batch size * 1 * emb_size
+    """
     pooling_vec_list = defaultdict(list)
     for fc in varlen_sparse_feature_columns:
         feature_name = fc.name
-        combiner = fc.combiner
+        combiner = fc.combiner # 一般是 mean
         feature_length_name = fc.length_name
         if feature_length_name is not None:
+            # 有长度传进来，就不需layer 的 mask 功能了，手动传入 lenght 即可
             if fc.weight_name is not None:
-                seq_input = WeightedSequenceLayer(weight_normalization=fc.weight_norm)(
-                    [embedding_dict[feature_name], features[feature_length_name], features[fc.weight_name]])
+                seq_input = WeightedSequenceLayer(weight_normalization=fc.weight_norm)([embedding_dict[feature_name], features[feature_length_name], features[fc.weight_name]])
             else:
                 seq_input = embedding_dict[feature_name]
-            vec = SequencePoolingLayer(combiner, supports_masking=False)(
-                [seq_input, features[feature_length_name]])
+            vec = SequencePoolingLayer(combiner, supports_masking=False)([seq_input, features[feature_length_name]])
         else:
+            # 需要 mask=true
             if fc.weight_name is not None:
-                seq_input = WeightedSequenceLayer(weight_normalization=fc.weight_norm, supports_masking=True)(
-                    [embedding_dict[feature_name], features[fc.weight_name]])
+                seq_input = WeightedSequenceLayer(weight_normalization=fc.weight_norm, supports_masking=True)([embedding_dict[feature_name], features[fc.weight_name]])
             else:
                 seq_input = embedding_dict[feature_name]
-            vec = SequencePoolingLayer(combiner, supports_masking=True)(
-                seq_input)
+            vec = SequencePoolingLayer(combiner, supports_masking=True)(seq_input)
         pooling_vec_list[fc.group_name].append(vec)
     if to_list:
         return chain.from_iterable(pooling_vec_list.values())
@@ -133,9 +150,14 @@ def get_varlen_pooling_list(embedding_dict, features, varlen_sparse_feature_colu
 
 
 def get_dense_input(features, feature_columns):
+    """
+    过滤出DenseFeat Input，转成 list 输出
+    :type features: dict[Input]
+    :type feature_columns: list
+    :type output: list[Input]
+    """
     from . import feature_column as fc_lib
-    dense_feature_columns = list(
-        filter(lambda x: isinstance(x, fc_lib.DenseFeat), feature_columns)) if feature_columns else []
+    dense_feature_columns = list(filter(lambda x: isinstance(x, fc_lib.DenseFeat), feature_columns)) if feature_columns else []
     dense_input_list = []
     for fc in dense_feature_columns:
         if fc.transform_fn is None:

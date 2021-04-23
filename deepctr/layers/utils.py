@@ -67,6 +67,10 @@ class Hash(tf.keras.layers.Layer):
 
 
 class Linear(tf.keras.layers.Layer):
+    """
+    稀疏特征直接 reduce sum， dense特征线性变换
+    输出格式 batch size * 1
+    """
 
     def __init__(self, l2_reg=0.0, mode=0, use_bias=False, seed=1024, **kwargs):
 

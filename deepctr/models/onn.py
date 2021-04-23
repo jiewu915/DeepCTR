@@ -51,8 +51,7 @@ def ONN(linear_feature_columns, dnn_feature_columns, embedding_size=4, dnn_hidde
 
     inputs_list = list(features.values())
 
-    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear',
-                                    l2_reg=l2_reg_linear)
+    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear', l2_reg=l2_reg_linear)
 
     sparse_feature_columns = list(
         filter(lambda x: isinstance(x, SparseFeat), dnn_feature_columns)) if dnn_feature_columns else []

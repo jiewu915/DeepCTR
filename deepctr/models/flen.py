@@ -57,11 +57,7 @@ def FLEN(linear_feature_columns,
         seed,
         support_group=True)
 
-    linear_logit = get_linear_logit(features,
-                                    linear_feature_columns,
-                                    seed=seed,
-                                    prefix='linear',
-                                    l2_reg=l2_reg_linear)
+    linear_logit = get_linear_logit(features, linear_feature_columns, seed=seed, prefix='linear', l2_reg=l2_reg_linear)
 
     fm_mf_out = FieldWiseBiInteraction(seed=seed)(
         [concat_func(v, axis=1) for k, v in group_embedding_dict.items()])

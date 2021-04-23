@@ -56,33 +56,23 @@ class LocalActivationUnit(Layer):
     def build(self, input_shape):
 
         if not isinstance(input_shape, list) or len(input_shape) != 2:
-            raise ValueError('A `LocalActivationUnit` layer should be called '
-                             'on a list of 2 inputs')
+            raise ValueError('A `LocalActivationUnit` layer should be called ' 'on a list of 2 inputs')
 
         if len(input_shape[0]) != 3 or len(input_shape[1]) != 3:
-            raise ValueError("Unexpected inputs dimensions %d and %d, expect to be 3 dimensions" % (
-                len(input_shape[0]), len(input_shape[1])))
+            raise ValueError("Unexpected inputs dimensions %d and %d, expect to be 3 dimensions" % (len(input_shape[0]), len(input_shape[1])))
 
         if input_shape[0][-1] != input_shape[1][-1] or input_shape[0][1] != 1:
             raise ValueError('A `LocalActivationUnit` layer requires '
                              'inputs of a two inputs with shape (None,1,embedding_size) and (None,T,embedding_size)'
                              'Got different shapes: %s,%s' % (input_shape[0], input_shape[1]))
-        size = 4 * \
-               int(input_shape[0][-1]
-                   ) if len(self.hidden_units) == 0 else self.hidden_units[-1]
-        self.kernel = self.add_weight(shape=(size, 1),
-                                      initializer=glorot_normal(
-                                          seed=self.seed),
-                                      name="kernel")
-        self.bias = self.add_weight(
-            shape=(1,), initializer=Zeros(), name="bias")
+        size = 4 * int(input_shape[0][-1]) if len(self.hidden_units) == 0 else self.hidden_units[-1]
+        self.kernel = self.add_weight(shape=(size, 1), initializer=glorot_normal(seed=self.seed), name="kernel")
+        self.bias = self.add_weight(shape=(1,), initializer=Zeros(), name="bias")
         self.dnn = DNN(self.hidden_units, self.activation, self.l2_reg, self.dropout_rate, self.use_bn, seed=self.seed)
 
-        self.dense = tf.keras.layers.Lambda(lambda x: tf.nn.bias_add(tf.tensordot(
-            x[0], x[1], axes=(-1, 0)), x[2]))
+        self.dense = tf.keras.layers.Lambda(lambda x: tf.nn.bias_add(tf.tensordot(x[0], x[1], axes=(-1, 0)), x[2]))
 
-        super(LocalActivationUnit, self).build(
-            input_shape)  # Be sure to call this somewhere!
+        super(LocalActivationUnit, self).build(input_shape)  # Be sure to call this somewhere!
 
     def call(self, inputs, training=None, **kwargs):
 
@@ -91,8 +81,7 @@ class LocalActivationUnit(Layer):
         keys_len = keys.get_shape()[1]
         queries = K.repeat_elements(query, keys_len, 1)
 
-        att_input = tf.concat(
-            [queries, keys, queries - keys, queries * keys], axis=-1)
+        att_input = tf.concat([queries, keys, queries - keys, queries * keys], axis=-1)
 
         att_out = self.dnn(att_input, training=training)
 
@@ -138,8 +127,7 @@ class DNN(Layer):
         - **seed**: A Python integer to use as random seed.
     """
 
-    def __init__(self, hidden_units, activation='relu', l2_reg=0, dropout_rate=0, use_bn=False, output_activation=None,
-                 seed=1024, **kwargs):
+    def __init__(self, hidden_units, activation='relu', l2_reg=0, dropout_rate=0, use_bn=False, output_activation=None, seed=1024, **kwargs):
         self.hidden_units = hidden_units
         self.activation = activation
         self.l2_reg = l2_reg
@@ -156,10 +144,8 @@ class DNN(Layer):
         input_size = input_shape[-1]
         hidden_units = [int(input_size)] + list(self.hidden_units)
         self.kernels = [self.add_weight(name='kernel' + str(i),
-                                        shape=(
-                                            hidden_units[i], hidden_units[i + 1]),
-                                        initializer=glorot_normal(
-                                            seed=self.seed),
+                                        shape=(hidden_units[i], hidden_units[i + 1]),
+                                        initializer=glorot_normal(seed=self.seed),
                                         regularizer=l2(self.l2_reg),
                                         trainable=True) for i in range(len(self.hidden_units))]
         self.bias = [self.add_weight(name='bias' + str(i),
@@ -169,8 +155,7 @@ class DNN(Layer):
         if self.use_bn:
             self.bn_layers = [tf.keras.layers.BatchNormalization() for _ in range(len(self.hidden_units))]
 
-        self.dropout_layers = [tf.keras.layers.Dropout(self.dropout_rate, seed=self.seed + i) for i in
-                               range(len(self.hidden_units))]
+        self.dropout_layers = [tf.keras.layers.Dropout(self.dropout_rate, seed=self.seed + i) for i in range(len(self.hidden_units))]
 
         self.activation_layers = [activation_layer(self.activation) for _ in range(len(self.hidden_units))]
 
@@ -184,8 +169,7 @@ class DNN(Layer):
         deep_input = inputs
 
         for i in range(len(self.hidden_units)):
-            fc = tf.nn.bias_add(tf.tensordot(
-                deep_input, self.kernels[i], axes=(-1, 0)), self.bias[i])
+            fc = tf.nn.bias_add(tf.tensordot(deep_input, self.kernels[i], axes=(-1, 0)), self.bias[i])
 
             if self.use_bn:
                 fc = self.bn_layers[i](fc, training=training)
@@ -231,8 +215,7 @@ class PredictionLayer(Layer):
     def build(self, input_shape):
 
         if self.use_bias:
-            self.global_bias = self.add_weight(
-                shape=(1,), initializer=Zeros(), name="global_bias")
+            self.global_bias = self.add_weight(shape=(1,), initializer=Zeros(), name="global_bias")
 
         # Be sure to call this somewhere!
         super(PredictionLayer, self).build(input_shape)
